@@ -34,11 +34,14 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-UserSchema.pre("save", async function hashPassword(next) {
-  if (!this.isModified("password")) return next();
+/* Async pre-save hook — NO `next` parameter.
+   Mongoose 8 treats this as a Promise-based middleware, so returning
+   from the function is enough. Calling next() would crash. */
+UserSchema.pre("save", async function hashPassword() {
+  if (!this.isModified("password")) return;
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
-  next();
 });
 
 UserSchema.methods.comparePassword = function comparePassword(candidate) {

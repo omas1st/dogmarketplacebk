@@ -7,18 +7,27 @@ const { adminOnly } = require("../middleware/admin");
 
 const router = express.Router();
 
+const MAX_IMAGES = 4;
+
+/* Normalizes whatever the client sent into a clean array of image URLs */
+function normalizeImages(images, fallbackImage) {
+  let list = [];
+
+  if (Array.isArray(images)) {
+    list = images.map((url) => String(url || "").trim()).filter(Boolean);
+  }
+
+  if (list.length === 0 && fallbackImage) {
+    list = [String(fallbackImage).trim()].filter(Boolean);
+  }
+
+  return list.slice(0, MAX_IMAGES);
+}
+
 /* GET /api/products */
 router.get("/", async (req, res) => {
   try {
-    const {
-      itemType,
-      search,
-      shape,
-      type,
-      minPrice,
-      maxPrice,
-      all,
-    } = req.query;
+    const { itemType, search, shape, type, minPrice, maxPrice, all } = req.query;
 
     const filter = {};
 
@@ -31,7 +40,6 @@ router.get("/", async (req, res) => {
       ];
     }
 
-    // Shape is not stored directly — treat it as a soft match on title/description
     if (shape && shape !== "all") {
       const shapeRegex = { $regex: shape, $options: "i" };
       filter.$and = filter.$and || [];
@@ -40,7 +48,6 @@ router.get("/", async (req, res) => {
       });
     }
 
-    // Type is a soft match on title/description
     if (type && type !== "all") {
       const typeRegex = { $regex: type, $options: "i" };
       filter.$and = filter.$and || [];
@@ -64,9 +71,7 @@ router.get("/", async (req, res) => {
       }
     }
 
-    // "all" is only honored for admin listing — otherwise it is ignored
     if (all !== "true" && !itemType) {
-      // default to supplies when nothing is passed
       filter.itemType = "dog_supply";
     }
 
@@ -114,13 +119,22 @@ router.post("/", protect, adminOnly, async (req, res) => {
       category,
       stockStatus,
       image,
+      images,
       sizes,
     } = req.body || {};
 
-    if (!title || !description || !image || originalPrice === undefined) {
+    if (!title || !description || originalPrice === undefined) {
       return res
         .status(400)
         .json({ message: "Missing required product fields." });
+    }
+
+    const cleanImages = normalizeImages(images, image);
+
+    if (cleanImages.length === 0) {
+      return res
+        .status(400)
+        .json({ message: "Please provide at least one product image." });
     }
 
     const product = await Product.create({
@@ -132,8 +146,11 @@ router.post("/", protect, adminOnly, async (req, res) => {
         discountPercent === undefined ? 20 : Number(discountPercent),
       category: category || "dog_clothing_accessories",
       stockStatus: stockStatus || "in_stock",
-      image: String(image).trim(),
-      sizes: Array.isArray(sizes) ? sizes.map((s) => String(s).trim()).filter(Boolean) : [],
+      image: cleanImages[0],
+      images: cleanImages,
+      sizes: Array.isArray(sizes)
+        ? sizes.map((s) => String(s).trim()).filter(Boolean)
+        : [],
     });
 
     return res.status(201).json({ product });
@@ -159,6 +176,7 @@ router.put("/:id", protect, adminOnly, async (req, res) => {
       category,
       stockStatus,
       image,
+      images,
       sizes,
     } = req.body || {};
 
@@ -166,16 +184,31 @@ router.put("/:id", protect, adminOnly, async (req, res) => {
 
     if (itemType !== undefined) update.itemType = itemType;
     if (title !== undefined) update.title = String(title).trim();
-    if (description !== undefined) update.description = String(description).trim();
-    if (originalPrice !== undefined) update.originalPrice = Number(originalPrice);
-    if (discountPercent !== undefined) update.discountPercent = Number(discountPercent);
+    if (description !== undefined)
+      update.description = String(description).trim();
+    if (originalPrice !== undefined)
+      update.originalPrice = Number(originalPrice);
+    if (discountPercent !== undefined)
+      update.discountPercent = Number(discountPercent);
     if (category !== undefined) update.category = category;
     if (stockStatus !== undefined) update.stockStatus = stockStatus;
-    if (image !== undefined) update.image = String(image).trim();
     if (sizes !== undefined) {
       update.sizes = Array.isArray(sizes)
         ? sizes.map((s) => String(s).trim()).filter(Boolean)
         : [];
+    }
+
+    if (images !== undefined || image !== undefined) {
+      const cleanImages = normalizeImages(images, image);
+
+      if (cleanImages.length === 0) {
+        return res
+          .status(400)
+          .json({ message: "Please provide at least one product image." });
+      }
+
+      update.images = cleanImages;
+      update.image = cleanImages[0];
     }
 
     // Recompute selling price against existing values if only one changed

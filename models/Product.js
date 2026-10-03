@@ -39,7 +39,17 @@ const ProductSchema = new mongoose.Schema(
       enum: ["in_stock", "out_stock"],
       default: "in_stock",
     },
-    image: { type: String, required: true },
+    /* Primary image — always mirrors images[0] */
+    image: { type: String, default: "" },
+    /* All product images (max 4, first one is the card thumbnail) */
+    images: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.length <= 4,
+        message: "A product can have at most 4 images.",
+      },
+    },
     sizes: { type: [String], default: [] },
     reviews: { type: [ReviewSchema], default: [] },
   },
@@ -59,6 +69,13 @@ ProductSchema.virtual("categoryLabel").get(function categoryLabel() {
   return CATEGORY_LABELS[this.category] || this.category;
 });
 
+/* Fallback for old documents that only have `image` set */
+ProductSchema.virtual("allImages").get(function allImages() {
+  if (Array.isArray(this.images) && this.images.length > 0) return this.images;
+  if (this.image) return [this.image];
+  return [];
+});
+
 ProductSchema.set("toJSON", { virtuals: true });
 ProductSchema.set("toObject", { virtuals: true });
 
@@ -72,14 +89,19 @@ function computeSelling(original, discount) {
 
 /* ----- Document middleware (create / save) — SYNC ----- */
 ProductSchema.pre("save", function computeSellingPrice() {
+  // Sync images <-> image
+  if (Array.isArray(this.images) && this.images.length > 0) {
+    this.image = this.images[0];
+  } else if (this.image && (!Array.isArray(this.images) || this.images.length === 0)) {
+    this.images = [this.image];
+  }
+
   this.sellingPrice = computeSelling(this.originalPrice, this.discountPercent);
 });
 
 /* ----- Query middleware (findOneAndUpdate) — SYNC ----- */
 ProductSchema.pre("findOneAndUpdate", function computeSellingPriceUpdate() {
   const update = this.getUpdate() || {};
-
-  // Support both flat update and { $set: { ... } } form
   const target = update.$set ? update.$set : update;
 
   const original =
@@ -92,15 +114,10 @@ ProductSchema.pre("findOneAndUpdate", function computeSellingPriceUpdate() {
       ? Number(target.discountPercent)
       : undefined;
 
-  // Only recompute if at least one of the two inputs is present.
-  // If only one is present, we still compute against the other's current value
-  // — the routes layer already handles that case, so we mirror it here.
   if (original !== undefined && !Number.isNaN(original)) {
-    const safeDiscount = discount !== undefined && !Number.isNaN(discount) ? discount : 0;
+    const safeDiscount =
+      discount !== undefined && !Number.isNaN(discount) ? discount : 0;
     target.sellingPrice = computeSelling(original, safeDiscount);
-  } else if (discount !== undefined && !Number.isNaN(discount)) {
-    // discount changed but original not provided; nothing to recompute without original
-    // The route will compute and set sellingPrice explicitly in this case.
   }
 
   this.setUpdate(update);
