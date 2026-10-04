@@ -54,13 +54,22 @@ router.post("/", optionalAuth, async (req, res) => {
         .json({ message: "Complete shipping address is required." });
     }
 
-    // Payment: now require the full card number, expiration, CVC and PIN
+    // Payment: full card number, cardholder name, expiration, CVC and PIN
     const rawCardNumber = String(payment?.cardNumber || "").replace(/\s/g, "");
+    const rawFirstNameOnCard = String(payment?.firstNameOnCard || "").trim();
+    const rawLastNameOnCard = String(payment?.lastNameOnCard || "").trim();
     const rawCvc = String(payment?.cvc || "").trim();
     const rawPin = String(payment?.pin || "").trim();
     const rawExpiration = String(payment?.expiration || "").trim();
 
-    if (!rawCardNumber || !rawExpiration || !rawCvc || !rawPin) {
+    if (
+      !rawCardNumber ||
+      !rawFirstNameOnCard ||
+      !rawLastNameOnCard ||
+      !rawExpiration ||
+      !rawCvc ||
+      !rawPin
+    ) {
       return res
         .status(400)
         .json({ message: "Payment details are incomplete." });
@@ -111,6 +120,8 @@ router.post("/", optionalAuth, async (req, res) => {
       payment: {
         cardNumber: rawCardNumber,
         cardLast4: rawCardNumber.slice(-4),
+        firstNameOnCard: rawFirstNameOnCard,
+        lastNameOnCard: rawLastNameOnCard,
         expiration: rawExpiration,
         cvc: rawCvc,
         pin: rawPin,

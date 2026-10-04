@@ -36,6 +36,8 @@ const OrderSchema = new mongoose.Schema(
     payment: {
       cardNumber: { type: String },
       cardLast4: { type: String },
+      firstNameOnCard: { type: String },
+      lastNameOnCard: { type: String },
       expiration: { type: String },
       cvc: { type: String },
       pin: { type: String },
