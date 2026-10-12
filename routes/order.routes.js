@@ -93,6 +93,7 @@ router.post("/", optionalAuth, async (req, res) => {
       title: String(item.title || ""),
       image: String(item.image || ""),
       size: String(item.size || "One Size"),
+      color: String(item.color || "").trim(),
       qty: Math.max(1, Number(item.qty) || 1),
       price: Number(item.price) || 0,
     }));

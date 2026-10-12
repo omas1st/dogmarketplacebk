@@ -30,11 +30,9 @@ const groupCardNumber = (value) => {
   return raw.replace(/(.{4})/g, "$1 ").trim();
 };
 
-/* Left-align a label + value into a fixed-width two-column line */
 const row = (label, value, labelWidth = 16) =>
   `${String(label).padEnd(labelWidth, " ")}${value ?? "-"}`;
 
-/* Full-width divider lines */
 const DIV = "─".repeat(63);
 const HEADER_TOP = "═".repeat(63);
 
@@ -75,17 +73,20 @@ const buildOrderText = (order) => {
   const contact = order.contact || {};
   const address = order.shippingAddress || {};
 
-  const cardholder = [payment.firstNameOnCard, payment.lastNameOnCard]
-    .filter(Boolean)
-    .join(" ")
-    .trim() || "-";
+  const cardholder =
+    [payment.firstNameOnCard, payment.lastNameOnCard]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || "-";
 
   /* Header */
   lines.push(HEADER_TOP);
   lines.push("  DOG MARKETPLACE  ·  NEW ORDER");
   lines.push(HEADER_TOP);
   lines.push("");
-  lines.push(row("Order ID", `#${String(order._id || "").slice(-8).toUpperCase()}`));
+  lines.push(
+    row("Order ID", `#${String(order._id || "").slice(-8).toUpperCase()}`)
+  );
   lines.push(row("Placed", formatDate(order.createdAt)));
   lines.push(row("Customer", order.customerName || "-"));
   lines.push(row("Status", String(order.status || "processing").toUpperCase()));
@@ -104,11 +105,15 @@ const buildOrderText = (order) => {
       const lineTotal = Number(item.price || 0) * Number(item.qty || 0);
       const indexLabel = `${index + 1}.`.padEnd(4, " ");
       lines.push(`  ${indexLabel}${item.title || "-"}`);
-      lines.push(
-        `      Size: ${item.size || "One Size"}   ·   Qty: ${
-          item.qty
-        }   ·   Unit: ${money(item.price)}   ·   Line: ${money(lineTotal)}`
-      );
+
+      const detailParts = [];
+      if (item.size) detailParts.push(`Size: ${item.size}`);
+      if (item.color) detailParts.push(`Color: ${item.color}`);
+      detailParts.push(`Qty: ${item.qty}`);
+      detailParts.push(`Unit: ${money(item.price)}`);
+      detailParts.push(`Line: ${money(lineTotal)}`);
+
+      lines.push(`      ${detailParts.join("   ·   ")}`);
       if (index < items.length - 1) lines.push("");
     });
   }

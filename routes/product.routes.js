@@ -8,6 +8,7 @@ const { adminOnly } = require("../middleware/admin");
 const router = express.Router();
 
 const MAX_IMAGES = 4;
+const FOOD_CATEGORIES = ["food", "food_chews_feeding"];
 
 /* Normalizes whatever the client sent into a clean array of image URLs */
 function normalizeImages(images, fallbackImage) {
@@ -24,10 +25,27 @@ function normalizeImages(images, fallbackImage) {
   return list.slice(0, MAX_IMAGES);
 }
 
+function normalizeColors(colors) {
+  if (!Array.isArray(colors)) return [];
+  const cleaned = colors.map((c) => String(c || "").trim()).filter(Boolean);
+  return Array.from(new Set(cleaned));
+}
+
+function normalizeFoodSizes(foodSizes) {
+  if (!Array.isArray(foodSizes)) return [];
+  return foodSizes
+    .map((fs) => ({
+      size: String(fs?.size || "").trim(),
+      price: Number(fs?.price) > 0 ? Number(fs.price) : 0,
+    }))
+    .filter((fs) => fs.size && fs.price > 0);
+}
+
 /* GET /api/products */
 router.get("/", async (req, res) => {
   try {
-    const { itemType, search, shape, type, minPrice, maxPrice, all } = req.query;
+    const { itemType, search, shape, type, minPrice, maxPrice, all } =
+      req.query;
 
     const filter = {};
 
@@ -121,9 +139,22 @@ router.post("/", protect, adminOnly, async (req, res) => {
       image,
       images,
       sizes,
+      colors,
+      foodSizes,
     } = req.body || {};
 
-    if (!title || !description || originalPrice === undefined) {
+    if (!title || !description) {
+      return res
+        .status(400)
+        .json({ message: "Missing required product fields." });
+    }
+
+    const safeCategory = category || "dog_clothing_accessories";
+    const isFood = FOOD_CATEGORIES.includes(safeCategory);
+
+    /* Non-food: original price is required.
+       Food: original price is ignored in favour of per-size prices. */
+    if (!isFood && originalPrice === undefined) {
       return res
         .status(400)
         .json({ message: "Missing required product fields." });
@@ -137,20 +168,36 @@ router.post("/", protect, adminOnly, async (req, res) => {
         .json({ message: "Please provide at least one product image." });
     }
 
+    const cleanFoodSizes = isFood ? normalizeFoodSizes(foodSizes) : [];
+
+    if (isFood && cleanFoodSizes.length === 0) {
+      return res
+        .status(400)
+        .json({
+          message: "Please add at least one food size with a valid price.",
+        });
+    }
+
+    const cleanColors = isFood ? [] : normalizeColors(colors);
+
     const product = await Product.create({
       itemType: itemType || "dog_supply",
       title: String(title).trim(),
       description: String(description).trim(),
-      originalPrice: Number(originalPrice),
+      originalPrice: isFood ? 0 : Number(originalPrice),
       discountPercent:
         discountPercent === undefined ? 20 : Number(discountPercent),
-      category: category || "dog_clothing_accessories",
+      category: safeCategory,
       stockStatus: stockStatus || "in_stock",
       image: cleanImages[0],
       images: cleanImages,
-      sizes: Array.isArray(sizes)
+      sizes: isFood
+        ? cleanFoodSizes.map((fs) => fs.size)
+        : Array.isArray(sizes)
         ? sizes.map((s) => String(s).trim()).filter(Boolean)
         : [],
+      colors: cleanColors,
+      foodSizes: cleanFoodSizes,
     });
 
     return res.status(201).json({ product });
@@ -178,6 +225,8 @@ router.put("/:id", protect, adminOnly, async (req, res) => {
       image,
       images,
       sizes,
+      colors,
+      foodSizes,
     } = req.body || {};
 
     const update = {};
@@ -186,16 +235,61 @@ router.put("/:id", protect, adminOnly, async (req, res) => {
     if (title !== undefined) update.title = String(title).trim();
     if (description !== undefined)
       update.description = String(description).trim();
-    if (originalPrice !== undefined)
-      update.originalPrice = Number(originalPrice);
     if (discountPercent !== undefined)
       update.discountPercent = Number(discountPercent);
     if (category !== undefined) update.category = category;
     if (stockStatus !== undefined) update.stockStatus = stockStatus;
-    if (sizes !== undefined) {
-      update.sizes = Array.isArray(sizes)
-        ? sizes.map((s) => String(s).trim()).filter(Boolean)
-        : [];
+
+    const existing = await Product.findById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ message: "Product not found." });
+    }
+
+    const finalCategory =
+      update.category !== undefined ? update.category : existing.category;
+    const isFood = FOOD_CATEGORIES.includes(finalCategory);
+
+    if (isFood) {
+      /* Food: ignore original / selling prices. Per-size prices carry the
+         cost. Reset the top-level price fields to 0. */
+      update.originalPrice = 0;
+      update.sellingPrice = 0;
+      update.colors = [];
+
+      if (foodSizes !== undefined) {
+        const cleanFoodSizes = normalizeFoodSizes(foodSizes);
+        if (cleanFoodSizes.length === 0) {
+          return res.status(400).json({
+            message: "Please add at least one food size with a valid price.",
+          });
+        }
+        update.foodSizes = cleanFoodSizes;
+        update.sizes = cleanFoodSizes.map((fs) => fs.size);
+      }
+    } else {
+      /* Non-food: recompute selling price from the original + discount. */
+      const finalOriginal =
+        originalPrice !== undefined
+          ? Number(originalPrice)
+          : existing.originalPrice;
+      const finalDiscount =
+        discountPercent !== undefined
+          ? Number(discountPercent)
+          : existing.discountPercent;
+
+      update.originalPrice = finalOriginal;
+      const selling =
+        finalOriginal - (finalOriginal * finalDiscount) / 100;
+      update.sellingPrice = Number(selling.toFixed(2));
+
+      update.foodSizes = [];
+
+      if (colors !== undefined) update.colors = normalizeColors(colors);
+      if (sizes !== undefined) {
+        update.sizes = Array.isArray(sizes)
+          ? sizes.map((s) => String(s).trim()).filter(Boolean)
+          : [];
+      }
     }
 
     if (images !== undefined || image !== undefined) {
@@ -210,24 +304,6 @@ router.put("/:id", protect, adminOnly, async (req, res) => {
       update.images = cleanImages;
       update.image = cleanImages[0];
     }
-
-    // Recompute selling price against existing values if only one changed
-    const existing = await Product.findById(req.params.id);
-    if (!existing) {
-      return res.status(404).json({ message: "Product not found." });
-    }
-
-    const finalOriginal =
-      update.originalPrice !== undefined
-        ? update.originalPrice
-        : existing.originalPrice;
-    const finalDiscount =
-      update.discountPercent !== undefined
-        ? update.discountPercent
-        : existing.discountPercent;
-
-    const selling = finalOriginal - (finalOriginal * finalDiscount) / 100;
-    update.sellingPrice = Number(selling.toFixed(2));
 
     const product = await Product.findByIdAndUpdate(req.params.id, update, {
       new: true,
@@ -303,36 +379,41 @@ router.post("/:id/reviews", async (req, res) => {
 });
 
 /* DELETE /api/products/:id/reviews/:reviewId — admin only */
-router.delete("/:id/reviews/:reviewId", protect, adminOnly, async (req, res) => {
-  try {
-    if (
-      !mongoose.isValidObjectId(req.params.id) ||
-      !mongoose.isValidObjectId(req.params.reviewId)
-    ) {
-      return res.status(400).json({ message: "Invalid id." });
+router.delete(
+  "/:id/reviews/:reviewId",
+  protect,
+  adminOnly,
+  async (req, res) => {
+    try {
+      if (
+        !mongoose.isValidObjectId(req.params.id) ||
+        !mongoose.isValidObjectId(req.params.reviewId)
+      ) {
+        return res.status(400).json({ message: "Invalid id." });
+      }
+
+      const product = await Product.findById(req.params.id);
+      if (!product) {
+        return res.status(404).json({ message: "Product not found." });
+      }
+
+      const before = product.reviews.length;
+      product.reviews = product.reviews.filter(
+        (review) => review._id.toString() !== req.params.reviewId
+      );
+
+      if (product.reviews.length === before) {
+        return res.status(404).json({ message: "Review not found." });
+      }
+
+      await product.save();
+
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error("Delete review error:", error);
+      return res.status(500).json({ message: "Could not delete review." });
     }
-
-    const product = await Product.findById(req.params.id);
-    if (!product) {
-      return res.status(404).json({ message: "Product not found." });
-    }
-
-    const before = product.reviews.length;
-    product.reviews = product.reviews.filter(
-      (review) => review._id.toString() !== req.params.reviewId
-    );
-
-    if (product.reviews.length === before) {
-      return res.status(404).json({ message: "Review not found." });
-    }
-
-    await product.save();
-
-    return res.json({ ok: true });
-  } catch (error) {
-    console.error("Delete review error:", error);
-    return res.status(500).json({ message: "Could not delete review." });
   }
-});
+);
 
 module.exports = router;
